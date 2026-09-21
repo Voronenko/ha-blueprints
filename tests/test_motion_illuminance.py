@@ -55,18 +55,34 @@ def turn_off_condition(bp):
     return t
 
 
+def _vars(**overrides):
+    base = dict(
+        illuminance_entities_raw=[],
+        lux_level_var=100,
+        illuminance_mode_var="any",
+        all_day_var=False,
+        hours_after_sunrise_var=2,
+        hours_before_sunset_var=2,
+    )
+    base.update(overrides)
+    return base
+
+
 def test_blueprint_has_expected_inputs(bp):
     inputs = bp["blueprint"]["input"]
     assert "devices" in inputs
     assert "motion_entity" in inputs["devices"]["input"]
     assert "motion_entities" in inputs["devices"]["input"]
     assert "light_target" in inputs["devices"]["input"]
+    assert "all_day" in inputs["time_window"]["input"]
+    assert inputs["time_window"]["input"]["all_day"]["default"] is False
     assert "hours_after_sunrise" in inputs["time_window"]["input"]
     assert "hours_before_sunset" in inputs["time_window"]["input"]
     assert inputs["time_window"]["input"]["hours_after_sunrise"]["default"] == 2
     assert inputs["time_window"]["input"]["hours_before_sunset"]["default"] == 2
     # illuminance defaults to any (override)
     assert inputs["illuminance"]["input"]["illuminance_mode"]["default"] == "any"
+    assert "lux_entity" not in inputs.get("illuminance", {}).get("input", {})
 
 
 def test_illuminance_any_below_overrides_night(main_template):
@@ -79,14 +95,7 @@ def test_illuminance_any_below_overrides_night(main_template):
         next_rising=nxt_r,
         next_setting=nxt_s,
         states={"sensor.lux1": "5", "sensor.lux2": "900"},
-        variables={
-            "illuminance_entities_raw": ["sensor.lux1", "sensor.lux2"],
-            "legacy_lux_entity": None,
-            "lux_level_var": 100,
-            "illuminance_mode_var": "any",
-            "hours_after_sunrise_var": 2,
-            "hours_before_sunset_var": 2,
-        },
+        variables=_vars(illuminance_entities_raw=["sensor.lux1", "sensor.lux2"]),
     )
     assert ok is True
 
@@ -100,14 +109,7 @@ def test_illuminance_any_all_bright_blocks_day(main_template):
         next_rising=nxt_r,
         next_setting=nxt_s,
         states={"sensor.lux1": "500", "sensor.lux2": "600"},
-        variables={
-            "illuminance_entities_raw": ["sensor.lux1", "sensor.lux2"],
-            "legacy_lux_entity": None,
-            "lux_level_var": 100,
-            "illuminance_mode_var": "any",
-            "hours_after_sunrise_var": 2,
-            "hours_before_sunset_var": 2,
-        },
+        variables=_vars(illuminance_entities_raw=["sensor.lux1", "sensor.lux2"]),
     )
     assert ok is False
 
@@ -122,14 +124,7 @@ def test_illuminance_all_mode_requires_all_dark(main_template):
         next_rising=nxt_r,
         next_setting=nxt_s,
         states={"sensor.lux1": "5", "sensor.lux2": "500"},
-        variables={
-            "illuminance_entities_raw": ["sensor.lux1", "sensor.lux2"],
-            "legacy_lux_entity": None,
-            "lux_level_var": 100,
-            "illuminance_mode_var": "all",
-            "hours_after_sunrise_var": 2,
-            "hours_before_sunset_var": 2,
-        },
+        variables=_vars(illuminance_entities_raw=["sensor.lux1", "sensor.lux2"], illuminance_mode_var="all"),
     )
     assert ok is False
     # both dark -> pass even at noon
@@ -139,14 +134,7 @@ def test_illuminance_all_mode_requires_all_dark(main_template):
         next_rising=nxt_r,
         next_setting=nxt_s,
         states={"sensor.lux1": "5", "sensor.lux2": "50"},
-        variables={
-            "illuminance_entities_raw": ["sensor.lux1", "sensor.lux2"],
-            "legacy_lux_entity": None,
-            "lux_level_var": 100,
-            "illuminance_mode_var": "all",
-            "hours_after_sunrise_var": 2,
-            "hours_before_sunset_var": 2,
-        },
+        variables=_vars(illuminance_entities_raw=["sensor.lux1", "sensor.lux2"], illuminance_mode_var="all"),
     )
     assert ok2 is True
 
@@ -161,14 +149,7 @@ def test_no_illuminance_sensors_uses_time_window_day_vs_night(main_template):
         next_rising=nxt_r,
         next_setting=nxt_s,
         states={},
-        variables={
-            "illuminance_entities_raw": [],
-            "legacy_lux_entity": None,
-            "lux_level_var": 100,
-            "illuminance_mode_var": "any",
-            "hours_after_sunrise_var": 2,
-            "hours_before_sunset_var": 2,
-        },
+        variables=_vars(),
     )
     assert ok_day is False
 
@@ -180,14 +161,7 @@ def test_no_illuminance_sensors_uses_time_window_day_vs_night(main_template):
         next_rising=nxt_r2,
         next_setting=nxt_s2,
         states={},
-        variables={
-            "illuminance_entities_raw": [],
-            "legacy_lux_entity": None,
-            "lux_level_var": 100,
-            "illuminance_mode_var": "any",
-            "hours_after_sunrise_var": 2,
-            "hours_before_sunset_var": 2,
-        },
+        variables=_vars(),
     )
     assert ok_night is True
 
@@ -199,14 +173,7 @@ def test_no_illuminance_sensors_uses_time_window_day_vs_night(main_template):
         next_rising=nxt_r3,
         next_setting=nxt_s3,
         states={},
-        variables={
-            "illuminance_entities_raw": [],
-            "legacy_lux_entity": None,
-            "lux_level_var": 100,
-            "illuminance_mode_var": "any",
-            "hours_after_sunrise_var": 2,
-            "hours_before_sunset_var": 2,
-        },
+        variables=_vars(),
     )
     assert ok_early is True
 
@@ -221,14 +188,7 @@ def test_0_sensors_or_unavailable_counts_as_no_dark(main_template):
         next_rising=nxt_r,
         next_setting=nxt_s,
         states={"sensor.lux1": "unavailable"},
-        variables={
-            "illuminance_entities_raw": ["sensor.lux1"],
-            "legacy_lux_entity": None,
-            "lux_level_var": 100,
-            "illuminance_mode_var": "any",
-            "hours_after_sunrise_var": 2,
-            "hours_before_sunset_var": 2,
-        },
+        variables=_vars(illuminance_entities_raw=["sensor.lux1"]),
     )
     assert ok is False
 
@@ -245,16 +205,39 @@ def test_defaults_2h_each_match_description(main_template):
             next_rising=nxt_r,
             next_setting=nxt_s,
             states={},
-            variables={
-                "illuminance_entities_raw": [],
-                "legacy_lux_entity": None,
-                "lux_level_var": 100,
-                "illuminance_mode_var": "any",
-                "hours_after_sunrise_var": 2,
-                "hours_before_sunset_var": 2,
-            },
+            variables=_vars(),
         )
         assert ok is expected, f"hour {h}: got {ok} expected {expected}"
+
+
+def test_all_day_covers_full_day(main_template):
+    # When all_day=true, time window is ignored -> even bright sensors at noon pass
+    for h in [0, 12, 15, 22]:
+        now_dt = dt.datetime(2026, 3, 20, h, 0, tzinfo=TZ)
+        nxt_r, nxt_s = make_next(SUNRISE, SUNSET, now_dt)
+        ok = render_template(
+            main_template,
+            now_dt=now_dt,
+            next_rising=nxt_r,
+            next_setting=nxt_s,
+            states={"sensor.lux1": "500"},
+            variables=_vars(illuminance_entities_raw=["sensor.lux1"], all_day_var=True),
+        )
+        assert ok is True, f"hour {h} should pass with all_day=True (got {ok})"
+    # and also with no sensors
+    noon = dt.datetime(2026, 3, 20, 12, 0, tzinfo=TZ)
+    nxt_r, nxt_s = make_next(SUNRISE, SUNSET, noon)
+    assert render_template(main_template, now_dt=noon, next_rising=nxt_r, next_setting=nxt_s, states={}, variables=_vars(all_day_var=True)) is True
+
+
+def test_all_day_false_still_respects_window(main_template):
+    # sanity: all_day=False must still block bright noon
+    noon = dt.datetime(2026, 3, 20, 12, 0, tzinfo=TZ)
+    nxt_r, nxt_s = make_next(SUNRISE, SUNSET, noon)
+    ok = render_template(
+        main_template, now_dt=noon, next_rising=nxt_r, next_setting=nxt_s, states={"sensor.lux1": "500"}, variables=_vars(illuminance_entities_raw=["sensor.lux1"], all_day_var=False)
+    )
+    assert ok is False
 
 
 def test_motion_wait_and_turn_off_requires_all_off(wait_template, turn_off_condition):

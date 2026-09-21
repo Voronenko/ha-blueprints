@@ -49,15 +49,6 @@ blueprint:
       icon: mdi:brightness-6
       collapsed: true
       input:
-        lux_entity:
-          name: Illuminance Sensor (legacy, single)
-          description: Legacy single sensor. Prefer 'Illuminance sensors' below. Leave unset if using the list.
-          default: null
-          selector:
-            entity:
-              filter:
-                - domain: sensor
-                  device_class: illuminance
         illuminance_entities:
           name: Illuminance sensors
           description: >
@@ -98,6 +89,12 @@ blueprint:
       icon: mdi:clock-outline
       collapsed: true
       input:
+        all_day:
+          name: All day (24/7)
+          description: When enabled, the time window covers the whole day (sun window is ignored).
+          default: false
+          selector:
+            boolean:
         hours_after_sunrise:
           name: Hours after sunrise
           description: Window stays active until this many hours after sunrise. Default 2.
@@ -141,10 +138,10 @@ max_exceeded: silent
 variables:
   legacy_motion_entity: !input motion_entity
   motion_entities_raw: !input motion_entities
-  legacy_lux_entity: !input lux_entity
   illuminance_entities_raw: !input illuminance_entities
   lux_level_var: !input lux_level
   illuminance_mode_var: !input illuminance_mode
+  all_day_var: !input all_day
   hours_after_sunrise_var: !input hours_after_sunrise
   hours_before_sunset_var: !input hours_before_sunset
   no_motion_wait_var: !input no_motion_wait
@@ -160,12 +157,7 @@ triggers:
 conditions:
   - condition: template
     value_template: >
-      {% set entities = [] %}
-      {% if illuminance_entities_raw is not none and illuminance_entities_raw | length > 0 %}
-        {% set entities = illuminance_entities_raw %}
-      {% elif legacy_lux_entity is not none and legacy_lux_entity not in ['', none] %}
-        {% set entities = [legacy_lux_entity] %}
-      {% endif %}
+      {% set entities = illuminance_entities_raw if illuminance_entities_raw is not none else [] %}
       {% set level = lux_level_var | float(0) %}
       {% set mode = illuminance_mode_var | default('any', true) %}
       {% set dark = false %}
@@ -189,6 +181,8 @@ conditions:
         {% endif %}
       {% endif %}
       {% if dark %}
+        true
+      {% elif all_day_var %}
         true
       {% else %}
         {% set after_h = hours_after_sunrise_var | float(2) %}
