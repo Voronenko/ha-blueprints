@@ -1,0 +1,270 @@
+blueprint:
+  name: Motion-activated Light with illuminance or sun window
+  description: >
+    Turn on a light when motion is detected if ANY configured illuminance sensor
+    is below the threshold OR the current time is inside the sun window
+    (from sunset minus hours_before_sunset until sunrise plus hours_after_sunrise).
+    Illuminance being dark overrides the time check. Leave illuminance sensors empty
+    to use only the time window.
+  domain: automation
+  author: voronenko
+  source_url: https://gist.github.com/Danielbook/7814e7eb32e880b2d7c3fb5ba8430f4f
+  homeassistant:
+    min_version: "2025.1.0"
+  input:
+    devices:
+      name: Devices
+      icon: mdi:motion-sensor
+      input:
+        motion_entity:
+          name: Motion Sensor (legacy, single)
+          description: Legacy single sensor. Prefer 'Motion Sensors' below. Leave unset if using the list.
+          default: null
+          selector:
+            entity:
+              filter:
+                - domain: binary_sensor
+                  device_class: motion
+        motion_entities:
+          name: Motion Sensors
+          description: >
+            One or more motion sensors. Any sensor turning on triggers
+            the light (e.g. two parts of a corridor). Leave empty if
+            using the legacy single sensor.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain: binary_sensor
+                  device_class: motion
+              multiple: true
+        light_target:
+          name: Light
+          selector:
+            target:
+              entity:
+                - domain: light
+    illuminance:
+      name: Illuminance
+      icon: mdi:brightness-6
+      collapsed: true
+      input:
+        lux_entity:
+          name: Illuminance Sensor (legacy, single)
+          description: Legacy single sensor. Prefer 'Illuminance sensors' below. Leave unset if using the list.
+          default: null
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: illuminance
+        illuminance_entities:
+          name: Illuminance sensors
+          description: >
+            0 or more sensors. If ANY is below threshold the light
+            may turn on regardless of time. Leave empty to disable the
+            illuminance check.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: illuminance
+              multiple: true
+        lux_level:
+          name: Illuminance threshold
+          description: Light may turn on when ANY sensor is below this value (or ALL if mode is set to all).
+          default: 100
+          selector:
+            number:
+              min: 0.0
+              max: 1000.0
+              step: 1.0
+              mode: slider
+        illuminance_mode:
+          name: Multiple sensors mode
+          description: When several sensors are selected, require any or all below threshold.
+          default: any
+          selector:
+            select:
+              options:
+                - label: Any below threshold
+                  value: any
+                - label: All below threshold
+                  value: all
+              mode: list
+    time_window:
+      name: Time window
+      icon: mdi:clock-outline
+      collapsed: true
+      input:
+        hours_after_sunrise:
+          name: Hours after sunrise
+          description: Window stays active until this many hours after sunrise. Default 2.
+          default: 2
+          selector:
+            number:
+              min: 0.0
+              max: 12.0
+              step: 0.5
+              unit_of_measurement: hours
+              mode: slider
+        hours_before_sunset:
+          name: Hours before sunset
+          description: Window becomes active this many hours before sunset. Default 2.
+          default: 2
+          selector:
+            number:
+              min: 0.0
+              max: 12.0
+              step: 0.5
+              unit_of_measurement: hours
+              mode: slider
+    settings:
+      name: Settings
+      icon: mdi:cog
+      collapsed: true
+      input:
+        no_motion_wait:
+          name: Wait time
+          description: Time to leave the light on after last motion is detected.
+          default: 120
+          selector:
+            number:
+              min: 0.0
+              max: 3600.0
+              unit_of_measurement: seconds
+              step: 1.0
+              mode: slider
+mode: restart
+max_exceeded: silent
+variables:
+  legacy_motion_entity: !input motion_entity
+  motion_entities_raw: !input motion_entities
+  legacy_lux_entity: !input lux_entity
+  illuminance_entities_raw: !input illuminance_entities
+  lux_level_var: !input lux_level
+  illuminance_mode_var: !input illuminance_mode
+  hours_after_sunrise_var: !input hours_after_sunrise
+  hours_before_sunset_var: !input hours_before_sunset
+  no_motion_wait_var: !input no_motion_wait
+triggers:
+  - trigger: state
+    entity_id: !input motion_entity
+    from: "off"
+    to: "on"
+  - trigger: state
+    entity_id: !input motion_entities
+    from: "off"
+    to: "on"
+conditions:
+  - condition: template
+    value_template: >
+      {% set entities = [] %}
+      {% if illuminance_entities_raw is not none and illuminance_entities_raw | length > 0 %}
+        {% set entities = illuminance_entities_raw %}
+      {% elif legacy_lux_entity is not none and legacy_lux_entity not in ['', none] %}
+        {% set entities = [legacy_lux_entity] %}
+      {% endif %}
+      {% set level = lux_level_var | float(0) %}
+      {% set mode = illuminance_mode_var | default('any', true) %}
+      {% set dark = false %}
+      {% if entities | length > 0 %}
+        {% if mode == 'all' %}
+          {% set ns = namespace(ok = true) %}
+          {% for e in entities %}
+            {% if states(e) in ['unknown','unavailable', none] or states(e) | float(9999) >= level %}
+              {% set ns.ok = false %}
+            {% endif %}
+          {% endfor %}
+          {% set dark = ns.ok %}
+        {% else %}
+          {% set ns = namespace(ok = false) %}
+          {% for e in entities %}
+            {% if states(e) not in ['unknown','unavailable', none] and states(e) | float(9999) < level %}
+              {% set ns.ok = true %}
+            {% endif %}
+          {% endfor %}
+          {% set dark = ns.ok %}
+        {% endif %}
+      {% endif %}
+      {% if dark %}
+        true
+      {% else %}
+        {% set after_h = hours_after_sunrise_var | float(2) %}
+        {% set before_h = hours_before_sunset_var | float(2) %}
+        {% set next_rising = as_datetime(state_attr('sun.sun','next_rising')) %}
+        {% set next_setting = as_datetime(state_attr('sun.sun','next_setting')) %}
+        {% if next_rising is none or next_setting is none %}
+          true
+        {% else %}
+          {% set now_dt = now() %}
+          {% set after_base = next_rising %}
+          {% if after_base > now_dt + timedelta(hours=12) %}
+            {% set after_base = after_base - timedelta(days=1) %}
+          {% elif after_base < now_dt - timedelta(hours=12) %}
+            {% set after_base = after_base + timedelta(days=1) %}
+          {% endif %}
+          {% set before_base = next_setting %}
+          {% if before_base > now_dt + timedelta(hours=12) %}
+            {% set before_base = before_base - timedelta(days=1) %}
+          {% elif before_base < now_dt - timedelta(hours=12) %}
+            {% set before_base = before_base + timedelta(days=1) %}
+          {% endif %}
+          {% set window_end = after_base + timedelta(hours=after_h) %}
+          {% set window_start = before_base - timedelta(hours=before_h) %}
+          {% if window_start == window_end %}
+            true
+          {% elif window_start < window_end %}
+            {{ window_start <= now_dt < window_end }}
+          {% else %}
+            {{ now_dt >= window_start or now_dt < window_end }}
+          {% endif %}
+        {% endif %}
+      {% endif %}
+actions:
+  - action: light.turn_on
+    target: !input light_target
+  - wait_template: >-
+      {% set motions = [] %}
+      {% if motion_entities_raw is not none and motion_entities_raw | length > 0 %}
+        {% set motions = motion_entities_raw %}
+      {% elif legacy_motion_entity is not none and legacy_motion_entity not in ['', none] %}
+        {% set motions = [legacy_motion_entity] %}
+      {% endif %}
+      {% if motions | length == 0 %}
+        true
+      {% else %}
+        {% set ns = namespace(all_off = true) %}
+        {% for m in motions %}
+          {% if is_state(m, 'on') %}
+            {% set ns.all_off = false %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.all_off }}
+      {% endif %}
+    timeout: "24:00:00"
+    continue_on_timeout: false
+  - delay:
+      seconds: !input no_motion_wait
+  - condition: template
+    value_template: >-
+      {% set motions = [] %}
+      {% if motion_entities_raw is not none and motion_entities_raw | length > 0 %}
+        {% set motions = motion_entities_raw %}
+      {% elif legacy_motion_entity is not none and legacy_motion_entity not in ['', none] %}
+        {% set motions = [legacy_motion_entity] %}
+      {% endif %}
+      {% if motions | length == 0 %}
+        true
+      {% else %}
+        {% set ns = namespace(all_off = true) %}
+        {% for m in motions %}
+          {% if is_state(m, 'on') %}
+            {% set ns.all_off = false %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.all_off }}
+      {% endif %}
+  - action: light.turn_off
+    target: !input light_target

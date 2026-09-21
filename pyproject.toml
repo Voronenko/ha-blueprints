@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "homatorium"
+version = "0.1.0"
+description = "blueprints"
+authors = ["voronenko <git@voronenko.info>"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.12"
+yamllint = "^1.38.0"
+pyyaml = "^6.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "pytest (>=9.1.1,<10.0.0)",
+    "homeassistant (==2025.1.4) ; python_version == \"3.12\"",
+    "josepy (==1.15.0)",
+    "acme (==3.0.1)",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-W ignore::DeprecationWarning"
