@@ -20,7 +20,7 @@ def _input_constructor(loader, node):
 yaml.SafeLoader.add_constructor("!input", _input_constructor)
 
 
-def load_blueprint(path: pathlib.Path | str = "motion-illuminance.yaml") -> dict:
+def load_blueprint(path: pathlib.Path | str = "blueprints/motion-illuminance.yaml") -> dict:
     text = pathlib.Path(path).read_text(encoding="utf-8")
     data = yaml.safe_load(text)
     return data, text

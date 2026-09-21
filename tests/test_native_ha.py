@@ -15,7 +15,7 @@ def test_native_blueprint_schema_and_templates():
     except Exception as e:  # pragma: no cover
         pytest.skip(f"homeassistant not installed: {e}")
 
-    path = pathlib.Path("motion-illuminance.yaml")
+    path = pathlib.Path("blueprints/motion-illuminance.yaml")
     data = hayaml.load_yaml(str(path))
     BLUEPRINT_SCHEMA(data)  # raises on invalid blueprint
 

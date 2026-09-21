@@ -4,7 +4,7 @@ BPLINT ?= $(POETRY) run python scripts/ha_blueprint_lint.py
 NATIVE ?= $(POETRY) run python scripts/ha_blueprint_native_check.py
 PYTEST ?= $(POETRY) run pytest
 
-YAML_FILES ?= motion-illuminance.yaml
+YAML_FILES ?= blueprints/motion-illuminance.yaml
 BPLINT_FLAGS ?=
 YAMLLINT_FLAGS ?=
 

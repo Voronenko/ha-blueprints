@@ -19,7 +19,7 @@ def _have_docker() -> bool:
 def main() -> int:
     p = argparse.ArgumentParser(description="Dockerized HA blueprint acceptance (opt-in)")
     p.add_argument("--image", default="ghcr.io/home-assistant/home-assistant:2025.1")
-    p.add_argument("--blueprint", default="motion-illuminance.yaml")
+    p.add_argument("--blueprint", default="blueprints/motion-illuminance.yaml")
     p.add_argument("--timeout", type=int, default=120)
     args = p.parse_args()
 
