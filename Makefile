@@ -3,6 +3,7 @@ YAMLLINT ?= $(POETRY) run yamllint
 BPLINT ?= $(POETRY) run python scripts/ha_blueprint_lint.py
 NATIVE ?= $(POETRY) run python scripts/ha_blueprint_native_check.py
 PYTEST ?= $(POETRY) run pytest
+JUNIT_XML ?= junit.xml
 
 YAML_FILES ?= blueprints/motion-illuminance.yaml
 BPLINT_FLAGS ?=
@@ -40,10 +41,10 @@ lint-strict: BPLINT_FLAGS=--warn-as-error
 lint-strict: lint
 
 test:
-	$(PYTEST) -q tests/test_motion_illuminance.py
+	$(PYTEST) -q --junitxml=$(JUNIT_XML) tests/test_motion_illuminance.py
 
 test-native:
-	$(PYTEST) -q tests/
+	$(PYTEST) -q --junitxml=$(JUNIT_XML) tests/
 
 acceptance:
 	$(POETRY) run python scripts/ha_acceptance_check.py --blueprint $(YAML_FILES)

@@ -10,14 +10,19 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -41,3 +46,20 @@ jobs:
 
       - name: Tests (incl. native)
         run: make test-native
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v6
+        if: success() || failure()
+        with:
+          name: junit-xml
+          path: junit.xml
+          if-no-files-found: error
+
+      - name: Publish Test Report
+        uses: dorny/test-reporter@v3
+        if: success() || failure()
+        with:
+          name: pytest
+          path: junit.xml
+          reporter: java-junit
+          fail-on-error: false

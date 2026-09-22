@@ -26,3 +26,5 @@ dev = [
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-W ignore::DeprecationWarning"
+junit_suite_name = "ha-blueprints"
+junit_family = "xunit2"
