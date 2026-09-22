@@ -1,0 +1,79 @@
+blueprint:
+  name: ZHA - Sonoff SNZB-01P
+  description: >
+    Perform actions with the Sonoff SNZB-01P Button. Bind single press,
+    double press and hold to automations (e.g. scenes or anything else)
+    via the ZHA `zha_event` fired by the device (device selector filters
+    `integration: zha`, `manufacturer: eWeLink`, `model: SNZB-01P`).
+  domain: automation
+  author: voronenko
+  source_url: https://github.com/Voronenko/ha-blueprints
+  homeassistant:
+    min_version: "2025.1.0"
+  input:
+    remote:
+      name: Remote
+      description: Sonoff Button to use
+      selector:
+        device:
+          integration: zha
+          manufacturer: eWeLink
+          model: SNZB-01P
+          multiple: false
+    single_press:
+      name: Single press
+      description: Action to run on single press
+      default: []
+      selector:
+        action: {}
+    double_press:
+      name: Double press
+      description: Action to run on double press
+      default: []
+      selector:
+        action: {}
+    hold:
+      name: Hold
+      description: Action to run on hold
+      default: []
+      selector:
+        action: {}
+mode: restart
+max_exceeded: silent
+variables:
+  remote_device_id: !input remote
+triggers:
+  - trigger: event
+    event_type: zha_event
+    event_data:
+      device_id: !input remote
+actions:
+  - variables:
+      command: "{{ trigger.event.data.command }}"
+      cluster_id: "{{ trigger.event.data.cluster_id }}"
+      endpoint_id: "{{ trigger.event.data.endpoint_id }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ command == 'toggle' }}"
+          - condition: template
+            value_template: "{{ cluster_id == 6 }}"
+          - condition: template
+            value_template: "{{ endpoint_id == 1 }}"
+        sequence: !input single_press
+      - conditions:
+          - condition: template
+            value_template: "{{ command == 'on' }}"
+          - condition: template
+            value_template: "{{ cluster_id == 6 }}"
+          - condition: template
+            value_template: "{{ endpoint_id == 1 }}"
+        sequence: !input double_press
+      - conditions:
+          - condition: template
+            value_template: "{{ command == 'off' }}"
+          - condition: template
+            value_template: "{{ cluster_id == 6 }}"
+          - condition: template
+            value_template: "{{ endpoint_id == 1 }}"
+        sequence: !input hold

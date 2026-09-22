@@ -5,7 +5,7 @@ NATIVE ?= $(POETRY) run python scripts/ha_blueprint_native_check.py
 PYTEST ?= $(POETRY) run pytest
 JUNIT_XML ?= junit.xml
 
-YAML_FILES ?= blueprints/motion-illuminance.yaml
+YAML_FILES ?= blueprints/motion-illuminance.yaml blueprints/button-sonoff-znzb-01p.yml
 BPLINT_FLAGS ?=
 YAMLLINT_FLAGS ?=
 
