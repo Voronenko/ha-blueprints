@@ -7,7 +7,7 @@ blueprint:
     `integration: zha`, `manufacturer: eWeLink`, `model: SNZB-01P`).
   domain: automation
   author: voronenko
-  source_url: https://github.com/Voronenko/ha-blueprints
+  source_url: https://github.com/Voronenko/ha-blueprints/blob/master/blueprints/button-sonoff-znzb-01p.yml
   homeassistant:
     min_version: "2025.1.0"
   input:
