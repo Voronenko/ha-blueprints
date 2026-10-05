@@ -71,7 +71,7 @@ def _vars(**overrides):
 def test_blueprint_has_expected_inputs(bp):
     inputs = bp["blueprint"]["input"]
     assert "devices" in inputs
-    assert "motion_entity" in inputs["devices"]["input"]
+    assert "motion_entity" not in inputs["devices"]["input"]
     assert "motion_entities" in inputs["devices"]["input"]
     assert "light_target" in inputs["devices"]["input"]
     assert "all_day" in inputs["time_window"]["input"]
@@ -243,13 +243,10 @@ def test_all_day_false_still_respects_window(main_template):
 def test_motion_wait_and_turn_off_requires_all_off(wait_template, turn_off_condition):
     # Same logic for both templates: true only if all motions are off
     for tmpl in (wait_template, turn_off_condition):
-        assert render_template(tmpl, now_dt=SUNRISE, next_rising=None, next_setting=None, states={"binary_sensor.m1": "off", "binary_sensor.m2": "off"}, variables={"motion_entities_raw": ["binary_sensor.m1", "binary_sensor.m2"], "legacy_motion_entity": None}) is True
-        assert render_template(tmpl, now_dt=SUNRISE, next_rising=None, next_setting=None, states={"binary_sensor.m1": "on", "binary_sensor.m2": "off"}, variables={"motion_entities_raw": ["binary_sensor.m1", "binary_sensor.m2"], "legacy_motion_entity": None}) is False
-        # legacy fallback
-        assert render_template(tmpl, now_dt=SUNRISE, next_rising=None, next_setting=None, states={"binary_sensor.m1": "off"}, variables={"motion_entities_raw": [], "legacy_motion_entity": "binary_sensor.m1"}) is True
+        assert render_template(tmpl, now_dt=SUNRISE, next_rising=None, next_setting=None, states={"binary_sensor.m1": "off", "binary_sensor.m2": "off"}, variables={"motion_entities_raw": ["binary_sensor.m1", "binary_sensor.m2"]}) is True
+        assert render_template(tmpl, now_dt=SUNRISE, next_rising=None, next_setting=None, states={"binary_sensor.m1": "on", "binary_sensor.m2": "off"}, variables={"motion_entities_raw": ["binary_sensor.m1", "binary_sensor.m2"]}) is False
 
 
-def test_legacy_motion_single_sensor_triggers(wait_template):
-    # legacy single sensor, off -> true, on -> false
-    assert render_template(wait_template, now_dt=SUNRISE, next_rising=None, next_setting=None, states={"binary_sensor.m1": "off"}, variables={"motion_entities_raw": [], "legacy_motion_entity": "binary_sensor.m1"}) is True
-    assert render_template(wait_template, now_dt=SUNRISE, next_rising=None, next_setting=None, states={"binary_sensor.m1": "on"}, variables={"motion_entities_raw": [], "legacy_motion_entity": "binary_sensor.m1"}) is False
+def test_no_motion_entities_wait_returns_true(wait_template):
+    # empty list: no sensors to wait for, template is immediately true
+    assert render_template(wait_template, now_dt=SUNRISE, next_rising=None, next_setting=None, states={"binary_sensor.m1": "off"}, variables={"motion_entities_raw": []}) is True

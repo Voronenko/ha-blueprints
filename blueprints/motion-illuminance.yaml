@@ -16,21 +16,11 @@ blueprint:
       name: Devices
       icon: mdi:motion-sensor
       input:
-        motion_entity:
-          name: Motion Sensor (legacy, single)
-          description: Legacy single sensor. Prefer 'Motion Sensors' below. Leave unset if using the list.
-          default: null
-          selector:
-            entity:
-              filter:
-                - domain: binary_sensor
-                  device_class: motion
         motion_entities:
           name: Motion Sensors
           description: >
             One or more motion sensors. Any sensor turning on triggers
-            the light (e.g. two parts of a corridor). Leave empty if
-            using the legacy single sensor.
+            the light (e.g. two parts of a corridor).
           default: []
           selector:
             entity:
@@ -136,7 +126,6 @@ blueprint:
 mode: restart
 max_exceeded: silent
 variables:
-  legacy_motion_entity: !input motion_entity
   motion_entities_raw: !input motion_entities
   illuminance_entities_raw: !input illuminance_entities
   lux_level_var: !input lux_level
@@ -146,10 +135,6 @@ variables:
   hours_before_sunset_var: !input hours_before_sunset
   no_motion_wait_var: !input no_motion_wait
 triggers:
-  - trigger: state
-    entity_id: !input motion_entity
-    from: "off"
-    to: "on"
   - trigger: state
     entity_id: !input motion_entities
     from: "off"
@@ -220,12 +205,7 @@ actions:
   - action: light.turn_on
     target: !input light_target
   - wait_template: >-
-      {% set motions = [] %}
-      {% if motion_entities_raw is not none and motion_entities_raw | length > 0 %}
-        {% set motions = motion_entities_raw %}
-      {% elif legacy_motion_entity is not none and legacy_motion_entity not in ['', none] %}
-        {% set motions = [legacy_motion_entity] %}
-      {% endif %}
+      {% set motions = motion_entities_raw if motion_entities_raw is not none else [] %}
       {% if motions | length == 0 %}
         true
       {% else %}
@@ -243,12 +223,7 @@ actions:
       seconds: !input no_motion_wait
   - condition: template
     value_template: >-
-      {% set motions = [] %}
-      {% if motion_entities_raw is not none and motion_entities_raw | length > 0 %}
-        {% set motions = motion_entities_raw %}
-      {% elif legacy_motion_entity is not none and legacy_motion_entity not in ['', none] %}
-        {% set motions = [legacy_motion_entity] %}
-      {% endif %}
+      {% set motions = motion_entities_raw if motion_entities_raw is not none else [] %}
       {% if motions | length == 0 %}
         true
       {% else %}

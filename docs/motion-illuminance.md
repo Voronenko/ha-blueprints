@@ -11,8 +11,7 @@ Turn on a light on motion when it is **dark** by illuminance **OR** the current 
 
 | Section | Field | Selector | Default | Meaning |
 |---|---|---|---|---|
-| `devices` | `motion_entity` (legacy) | `entity` `binary_sensor` `motion` | `null` | Single legacy sensor. Prefer list below. |
-|  | `motion_entities` | `entity` list `multiple: true` `binary_sensor` `motion` | `[]` | 1..N sensors. **Any** `off→on` triggers (corridor with 2 parts). Empty → fall back to legacy. |
+| `devices` | `motion_entities` | `entity` list `multiple: true` `binary_sensor` `motion` | `[]` | 1..N sensors. **Any** `off→on` triggers (corridor with 2 parts). |
 |  | `light_target` | `target` `light` | — | Light(s) to control. |
 | `illuminance` (collapsed) | `illuminance_entities` | `entity` list `multiple: true` `sensor` `illuminance` | `[]` | 0..N sensors. `[]` disables illuminance check. **List-only** (legacy `lux_entity` removed). |
 |  | `lux_level` | `number` 0–1000 step 1 slider | `100` | Threshold. Dark = `state < level` (float). |
@@ -29,7 +28,6 @@ Turn on a light on motion when it is **dark** by illuminance **OR** the current 
 `!input` must not appear inside Jinja `{{ }}`/`{% %}` (lint `BP012`) and `delay: !input` needs `seconds:` form (`HA120`). Variables bind each `!input` to a Jinja-usable name:
 
 ```
-legacy_motion_entity  = !input motion_entity
 motion_entities_raw   = !input motion_entities
 illuminance_entities_raw = !input illuminance_entities
 lux_level_var, illuminance_mode_var, all_day_var,
@@ -42,7 +40,6 @@ hours_after_sunrise_var, hours_before_sunset_var, no_motion_wait_var
 
 ```yaml
 triggers:
-  - trigger: state  entity_id: !input motion_entity    from: "off" to: "on"
   - trigger: state  entity_id: !input motion_entities  from: "off" to: "on"
 ```
 
@@ -165,7 +162,7 @@ Steps in YAML:
 1. `action: light.turn_on` → `target: !input light_target`
 2. `wait_template` — `ALL_OFF(motions)` (up to `24:00:00`, `continue_on_timeout: false`):
    ```
-   motions = motion_entities_raw if non-empty else [legacy_motion_entity] else []
+   motions = motion_entities_raw (empty list if null)
    [] -> true
    else all_off = every is_state(m,'on')? false : true  -> {{ ns.all_off }}
    ```
@@ -174,7 +171,7 @@ Steps in YAML:
 4. `condition: template` — identical `ALL_OFF` check. Guards against motion returning during the delay (race avoidance).
 5. `action: light.turn_off` → same target.
 
-If `motions` resolves to `[]` (no motion entity configured), both checks return `true` immediately — the sequence degrades to turn_on → delay → turn_off.
+If `motions` resolves to `[]` (no sensors configured), both checks return `true` immediately — the sequence degrades to turn_on → delay → turn_off.
 
 ---
 
@@ -198,7 +195,7 @@ If `motions` resolves to `[]` (no motion entity configured), both checks return 
 ## 7) Validation & tests
 
 - **Lint:** `make lint` → `yamllint` + `scripts/ha_blueprint_lint.py` (codes `BP002`-`BP020`, `HA100`-`HA120`). `make lint-native` → `BLUEPRINT_SCHEMA` + `Template.ensure_valid` (`homeassistant==2024.10.4`, py 3.12).
-- **Tests:** `tests/helpers.py` mocks `states`/`is_state`/`state_attr`/`as_datetime`/`now`/`timedelta`/`namespace`; `tests/test_motion_illuminance.py` covers illuminance `any`/`all`, unavailable, empty-list window, `all_day` 24/7, `2h` boundaries (`15F/16T/07T/08F`), and motion `ALL_OFF` for list + legacy. See helpers/tests for harness details.
+- **Tests:** `tests/helpers.py` mocks `states`/`is_state`/`state_attr`/`as_datetime`/`now`/`timedelta`/`namespace`; `tests/test_motion_illuminance.py` covers illuminance `any`/`all`, unavailable, empty-list window, `all_day` 24/7, `2h` boundaries (`15F/16T/07T/08F`), and motion `ALL_OFF` for the list. See helpers/tests for harness details.
 - **Acceptance (opt-in):** `make acceptance` runs HA `check_config` in `ghcr.io/home-assistant/home-assistant:2024.10` docker.
 
 ---
