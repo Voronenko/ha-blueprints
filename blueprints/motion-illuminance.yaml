@@ -6,6 +6,19 @@ blueprint:
     (from sunset minus hours_before_sunset until sunrise plus hours_after_sunrise).
     Illuminance being dark overrides the time check. Leave illuminance sensors empty
     to use only the time window.
+
+    The light turns off no_motion_wait seconds after the LAST motion event; every
+    new motion event restarts that countdown. The dark/time gate is evaluated as
+    the first action, not as an automation condition: a motion event that fails
+    the gate still runs the no-motion timer and turns the light off, so an
+    already-on light is never left on when later motion occurs outside the
+    light-on window.
+
+    Manual control is respected: a light last turned on by a person via HA is
+    not turned off. When an optional ownership flag (input_boolean) is
+    configured, a light that is on while the flag is off is treated as foreign
+    (turned on by a person or another automation, e.g. a button remote) and is
+    left completely untouched.
   domain: automation
   author: voronenko
   source_url: https://github.com/Voronenko/ha-blueprints/blob/master/blueprints/motion-illuminance.yaml
@@ -123,6 +136,25 @@ blueprint:
               unit_of_measurement: seconds
               step: 1.0
               mode: slider
+        ownership_flag:
+          name: Ownership flag (optional)
+          description: >
+            Not a yes/no switch: select an input_boolean helper here, or leave
+            empty. The automation manages the helper itself — ON while it owns
+            the light, OFF after it turns the light off. You never toggle it.
+            Leave empty: lights last switched on by a person through HA (app,
+            dashboard, voice) are respected — the automation will not turn
+            those off. Helper selected: additionally, a light that is ON while
+            the helper is OFF is treated as owned by someone else (person or
+            another automation, e.g. a button remote) and is left untouched —
+            no turn_on over it, no turn_off under it. Selecting a helper never
+            overrides manual control; it only extends the respect. Create one
+            input_boolean helper per automation instance.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain: input_boolean
 mode: restart
 max_exceeded: silent
 variables:
@@ -134,76 +166,118 @@ variables:
   hours_after_sunrise_var: !input hours_after_sunrise
   hours_before_sunset_var: !input hours_before_sunset
   no_motion_wait_var: !input no_motion_wait
+  light_target_var: !input light_target
+  ownership_flag_var: !input ownership_flag
+  light_entities_var: >
+    {% set t = light_target_var if light_target_var is mapping else {} %}
+    {% set e = t['entity_id'] if 'entity_id' in t else [] %}
+    {{ [e] if e is string else e }}
 triggers:
   - trigger: state
     entity_id: !input motion_entities
     from: "off"
     to: "on"
-conditions:
-  - condition: template
-    value_template: >
-      {% set entities = illuminance_entities_raw if illuminance_entities_raw is not none else [] %}
-      {% set level = lux_level_var | float(0) %}
-      {% set mode = illuminance_mode_var | default('any', true) %}
-      {% set dark = false %}
-      {% if entities | length > 0 %}
-        {% if mode == 'all' %}
-          {% set ns = namespace(ok = true) %}
-          {% for e in entities %}
-            {% if states(e) in ['unknown','unavailable', none] or states(e) | float(9999) >= level %}
-              {% set ns.ok = false %}
-            {% endif %}
-          {% endfor %}
-          {% set dark = ns.ok %}
-        {% else %}
-          {% set ns = namespace(ok = false) %}
-          {% for e in entities %}
-            {% if states(e) not in ['unknown','unavailable', none] and states(e) | float(9999) < level %}
-              {% set ns.ok = true %}
-            {% endif %}
-          {% endfor %}
-          {% set dark = ns.ok %}
-        {% endif %}
-      {% endif %}
-      {% if dark %}
-        true
-      {% elif all_day_var %}
-        true
-      {% else %}
-        {% set after_h = hours_after_sunrise_var | float(2) %}
-        {% set before_h = hours_before_sunset_var | float(2) %}
-        {% set next_rising = as_datetime(state_attr('sun.sun','next_rising')) %}
-        {% set next_setting = as_datetime(state_attr('sun.sun','next_setting')) %}
-        {% if next_rising is none or next_setting is none %}
-          true
-        {% else %}
-          {% set now_dt = now() %}
-          {% set after_base = next_rising %}
-          {% if after_base > now_dt + timedelta(hours=12) %}
-            {% set after_base = after_base - timedelta(days=1) %}
-          {% elif after_base < now_dt - timedelta(hours=12) %}
-            {% set after_base = after_base + timedelta(days=1) %}
-          {% endif %}
-          {% set before_base = next_setting %}
-          {% if before_base > now_dt + timedelta(hours=12) %}
-            {% set before_base = before_base - timedelta(days=1) %}
-          {% elif before_base < now_dt - timedelta(hours=12) %}
-            {% set before_base = before_base + timedelta(days=1) %}
-          {% endif %}
-          {% set window_end = after_base + timedelta(hours=after_h) %}
-          {% set window_start = before_base - timedelta(hours=before_h) %}
-          {% if window_start == window_end %}
-            true
-          {% elif window_start < window_end %}
-            {{ window_start <= now_dt < window_end }}
-          {% else %}
-            {{ now_dt >= window_start or now_dt < window_end }}
-          {% endif %}
-        {% endif %}
-      {% endif %}
 actions:
-  - action: light.turn_on
-    target: !input light_target
+  # Gate: decide whether THIS motion event may turn the light ON.
+  # Deliberately not an automation-level condition — even when the gate is
+  # false, the run continues into the no-motion timer below, so a re-trigger
+  # arriving when the light is already on (and the illuminance/sun gate no
+  # longer passes) still ends with light.turn_off instead of stranding the
+  # light (mode: restart already cancelled the previous run).
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >
+              {% set entities = illuminance_entities_raw if illuminance_entities_raw is not none else [] %}
+              {% set level = lux_level_var | float(0) %}
+              {% set mode = illuminance_mode_var | default('any', true) %}
+              {% set dark = false %}
+              {% if entities | length > 0 %}
+                {% if mode == 'all' %}
+                  {% set ns = namespace(ok = true) %}
+                  {% for e in entities %}
+                    {% if states(e) in ['unknown','unavailable', none] or states(e) | float(9999) >= level %}
+                      {% set ns.ok = false %}
+                    {% endif %}
+                  {% endfor %}
+                  {% set dark = ns.ok %}
+                {% else %}
+                  {% set ns = namespace(ok = false) %}
+                  {% for e in entities %}
+                    {% if states(e) not in ['unknown','unavailable', none] and states(e) | float(9999) < level %}
+                      {% set ns.ok = true %}
+                    {% endif %}
+                  {% endfor %}
+                  {% set dark = ns.ok %}
+                {% endif %}
+              {% endif %}
+              {% if dark %}
+                true
+              {% elif all_day_var %}
+                true
+              {% else %}
+                {% set after_h = hours_after_sunrise_var | float(2) %}
+                {% set before_h = hours_before_sunset_var | float(2) %}
+                {% set next_rising = as_datetime(state_attr('sun.sun','next_rising')) %}
+                {% set next_setting = as_datetime(state_attr('sun.sun','next_setting')) %}
+                {% if next_rising is none or next_setting is none %}
+                  true
+                {% else %}
+                  {% set now_dt = now() %}
+                  {% set after_base = next_rising %}
+                  {% if after_base > now_dt + timedelta(hours=12) %}
+                    {% set after_base = after_base - timedelta(days=1) %}
+                  {% elif after_base < now_dt - timedelta(hours=12) %}
+                    {% set after_base = after_base + timedelta(days=1) %}
+                  {% endif %}
+                  {% set before_base = next_setting %}
+                  {% if before_base > now_dt + timedelta(hours=12) %}
+                    {% set before_base = before_base - timedelta(days=1) %}
+                  {% elif before_base < now_dt - timedelta(hours=12) %}
+                    {% set before_base = before_base + timedelta(days=1) %}
+                  {% endif %}
+                  {% set window_end = after_base + timedelta(hours=after_h) %}
+                  {% set window_start = before_base - timedelta(hours=before_h) %}
+                  {% if window_start == window_end %}
+                    true
+                  {% elif window_start < window_end %}
+                    {{ window_start <= now_dt < window_end }}
+                  {% else %}
+                    {{ now_dt >= window_start or now_dt < window_end }}
+                  {% endif %}
+                {% endif %}
+              {% endif %}
+        sequence:
+          # Respect a light that is already on and owned by someone else:
+          # a person via HA (context.user_id set) or, when an ownership flag
+          # is configured, anything that turned the light on while the flag
+          # was off (e.g. a button automation). Do not claim it, do not
+          # turn it off later. ponytail: stale flag after a mid-run HA
+          # restart can mis-claim a foreign light once; self-heals on the
+          # next manual toggle of the light.
+          - condition: template
+            value_template: >-
+              {% set lights = light_entities_var if light_entities_var is not none else [] %}
+              {% set flag = ownership_flag_var if ownership_flag_var is string else none %}
+              {% set flag_usable = flag is not none and states(flag) not in ['unknown', 'unavailable', none] %}
+              {% set ns = namespace(foreign = false) %}
+              {% for st in states.light %}
+                {% if st.entity_id in lights and st.state == 'on' %}
+                  {% if st.context.user_id is not none or (flag_usable and is_state(flag, 'off')) %}
+                    {% set ns.foreign = true %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+              {{ not ns.foreign }}
+          - if:
+              - condition: template
+                value_template: "{{ ownership_flag_var is string and ownership_flag_var | length > 0 }}"
+            then:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: "{{ ownership_flag_var }}"
+          - action: light.turn_on
+            target: !input light_target
   - wait_template: >-
       {% set motions = motion_entities_raw if motion_entities_raw is not none else [] %}
       {% if motions | length == 0 %}
@@ -221,6 +295,23 @@ actions:
     continue_on_timeout: false
   - delay:
       seconds: !input no_motion_wait
+  # Ownership may have changed while we waited: a person or another
+  # automation may have (re)claimed the light. Same expression as the
+  # pre-turn_on check above.
+  - condition: template
+    value_template: >-
+      {% set lights = light_entities_var if light_entities_var is not none else [] %}
+      {% set flag = ownership_flag_var if ownership_flag_var is string else none %}
+      {% set flag_usable = flag is not none and states(flag) not in ['unknown', 'unavailable', none] %}
+      {% set ns = namespace(foreign = false) %}
+      {% for st in states.light %}
+        {% if st.entity_id in lights and st.state == 'on' %}
+          {% if st.context.user_id is not none or (flag_usable and is_state(flag, 'off')) %}
+            {% set ns.foreign = true %}
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+      {{ not ns.foreign }}
   - condition: template
     value_template: >-
       {% set motions = motion_entities_raw if motion_entities_raw is not none else [] %}
@@ -237,3 +328,10 @@ actions:
       {% endif %}
   - action: light.turn_off
     target: !input light_target
+  - if:
+      - condition: template
+        value_template: "{{ ownership_flag_var is string and ownership_flag_var | length > 0 }}"
+    then:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: "{{ ownership_flag_var }}"

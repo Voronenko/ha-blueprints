@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import pathlib
+import types
 import yaml
 
 
@@ -28,9 +29,20 @@ def load_blueprint(path: pathlib.Path | str = "blueprints/motion-illuminance.yam
 
 def extract_value_template(data: dict, index: int = 0) -> str:
     conds = data.get("conditions") or []
-    tmpl = conds[index].get("value_template") or conds[index].get("value_template", "")
-    # PyYAML keeps it as plain string
-    return tmpl
+    if conds:
+        # PyYAML keeps it as plain string
+        return conds[index].get("value_template", "")
+    # gate lives inside actions[].choose[].conditions[]
+    for a in data.get("actions") or []:
+        if not isinstance(a, dict):
+            continue
+        choose_val = a.get("choose")
+        entries = choose_val if isinstance(choose_val, list) else (choose_val or {}).get("choose", [])
+        for entry in entries or []:
+            for c in entry.get("conditions") or []:
+                if isinstance(c, dict) and "value_template" in c:
+                    return c["value_template"]
+    return ""
 
 
 def extract_wait_template(data: dict) -> str:
@@ -48,6 +60,44 @@ def extract_after_condition_template(data: dict) -> str:
         if a.get("condition") == "template" and "value_template" in a:
             return a["value_template"]
     return ""
+
+
+def iter_template_conditions(data: dict) -> list[str]:
+    """All template-condition texts anywhere in the action tree
+    (top-level, choose sequences, if branches, repeat, ...)."""
+    out: list[str] = []
+
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            if node.get("condition") == "template" and "value_template" in node:
+                out.append(node["value_template"])
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for i in node:
+                walk(i)
+
+    walk(data.get("actions") or [])
+    return out
+
+
+class _StatesNS:
+    """`states` callable that also exposes `states.light` as state objects."""
+
+    def __init__(self, states: dict[str, str], light_objs: list):
+        self._states = states
+        self.light = light_objs
+
+    def __call__(self, entity_id: str):
+        return self._states.get(entity_id)
+
+
+def make_light_obj(entity_id: str, state: str, user_id: str | None = None):
+    return types.SimpleNamespace(
+        entity_id=entity_id,
+        state=state,
+        context=types.SimpleNamespace(user_id=user_id),
+    )
 
 
 # Button blueprint helpers
@@ -111,15 +161,12 @@ def dispatch_button(data: dict, *, command: str, cluster_id: int, endpoint_id: i
     return None
 
 
-def render_template(tmpl_src: str, *, now_dt: dt.datetime, next_rising: dt.datetime | None, next_setting: dt.datetime | None, states: dict[str, str], variables: dict) -> bool:
+def render_template(tmpl_src: str, *, now_dt: dt.datetime, next_rising: dt.datetime | None, next_setting: dt.datetime | None, states: dict[str, str], variables: dict, light_objs: list | None = None) -> bool:
     import jinja2
 
     env = jinja2.Environment(undefined=jinja2.Undefined)
 
     # helpers
-    def fake_states(entity_id: str):
-        return states.get(entity_id)
-
     def fake_is_state(entity_id: str, state: str) -> bool:
         return states.get(entity_id) == state
 
@@ -147,7 +194,7 @@ def render_template(tmpl_src: str, *, now_dt: dt.datetime, next_rising: dt.datet
     # timedelta is available via datetime.timedelta in HA templates
     env.globals.update(
         {
-            "states": fake_states,
+            "states": _StatesNS(states, light_objs or []),
             "is_state": fake_is_state,
             "state_attr": fake_state_attr,
             "as_datetime": fake_as_datetime,

@@ -20,6 +20,7 @@ Turn on a light on motion when it is **dark** by illuminance **OR** the current 
 |  | `hours_after_sunrise` | `number` 0–12 step 0.5 `hours` | `2` | Window end = `sunrise + H_after`. |
 |  | `hours_before_sunset` | `number` 0–12 step 0.5 `hours` | `2` | Window start = `sunset − H_before`. |
 | `settings` (collapsed) | `no_motion_wait` | `number` 0–3600 step 1 `seconds` | `120` | Seconds to keep light after **all** motions are `off`. |
+|  | `ownership_flag` | `entity` `input_boolean` (optional) | `[]` | Helper the automation turns ON while it owns the light, OFF after releasing it. When set: a light ON with flag OFF = foreign (person or other automation) → untouched. See §5.1. |
 
 ---
 
@@ -32,6 +33,9 @@ motion_entities_raw   = !input motion_entities
 illuminance_entities_raw = !input illuminance_entities
 lux_level_var, illuminance_mode_var, all_day_var,
 hours_after_sunrise_var, hours_before_sunset_var, no_motion_wait_var
+light_target_var      = !input light_target          (for light_entities_var)
+ownership_flag_var    = !input ownership_flag        (optional helper)
+light_entities_var    = template: entity_id list from the light target
 ```
 
 ---
@@ -47,13 +51,15 @@ Either trigger fires the automation. For the list, HA expands it — any member 
 
 ---
 
-## 4) Gate condition — `conditions[0].value_template`
+## 4) Gate — first action (`choose` branch `value_template`)
 
-Evaluated after trigger. Returns `true` → continue to `light.turn_on`; `false` → stop. Precedence: **dark → all_day → sun window**.
+Evaluated on **every trigger** as the first action — deliberately **not** an automation-level condition. Returns `true` → `light.turn_on`; `false` → skip turning on but **continue into the no-motion tail**. Precedence: **dark → all_day → sun window**.
+
+Why not a top-level condition: `mode: restart` cancels the running instance on every motion `off→on`. If the gate were re-evaluated as a condition and now fails (e.g. the light itself pushed the lux sensor above the threshold, or the sun window closed), the new run dies at the condition while the old run is already gone — the light is stranded ON with nothing running. Keeping the gate inside the actions guarantees the turn-off tail always executes.
 
 ```mermaid
 flowchart TD
-  TRIG["Motion off->on"] --> C{"conditions[0]\nvalue_template"}
+  TRIG["Motion off->on"] --> C{"actions[0].choose\nvalue_template"}
   C --> E["entities = illuminance_entities_raw\n(empty list if null)"]
   E --> DARK{"entities non-empty?"}
   DARK -- "no" --> DARK_NO["dark = false"]
@@ -136,40 +142,102 @@ sequenceDiagram
   participant M as Motion
   participant A as Automation
   participant L as Light
-  M->>A: off->on
+  participant F as Flag
+  M->>A: off->on — restarts any running instance
   A->>A: gate dark ∨ all_day ∨ in_window?
   alt gate false
-    A-->>M: stop
+    A->>A: skip turn_on, continue to tail
   else gate true
-    A->>L: light.turn_on target
-    A->>A: wait_template ALL_OFF (timeout 24:00, continue_on_timeout false)
-    alt all motions off
-      A->>A: delay seconds=no_motion_wait
-      A->>A: condition ALL_OFF again
-      alt still all off
-        A->>L: light.turn_off target
-      else motion returned during delay
-        A-->>A: stop (no off)
+    A->>A: foreign-owner check (§5.1)
+    alt foreign light
+      A-->>A: stop — light not ours
+    else ours or unlit
+      opt flag configured
+        A->>F: input_boolean.turn_on — claim
       end
-    else timeout
-      A-->>A: stop (no off)
+      A->>L: light.turn_on target
+    end
+  end
+  A->>A: wait_template ALL_OFF — 24h timeout
+  A->>A: delay seconds=no_motion_wait
+  A->>A: foreign-owner re-check (§5.1)
+  alt foreign
+    A-->>A: stop — leave light alone
+  else still ours
+    A->>A: ALL_OFF re-check
+    alt still all off
+      A->>L: light.turn_off target
+      opt flag configured
+        A->>F: input_boolean.turn_off — release
+      end
+    else motion at delay end
+      A-->>A: stop — next trigger restarted the run
     end
   end
 ```
 
 Steps in YAML:
 
-1. `action: light.turn_on` → `target: !input light_target`
+1. `choose` — the gate `value_template` (§4). Match → ownership check (§5.1) → optional flag claim → `light.turn_on`. No match → fall through: the tail below **always runs**, even when the gate is false. This is the stranded-light deadlock fix (see §4).
 2. `wait_template` — `ALL_OFF(motions)` (up to `24:00:00`, `continue_on_timeout: false`):
    ```
    motions = motion_entities_raw (empty list if null)
    [] -> true
    else all_off = every is_state(m,'on')? false : true  -> {{ ns.all_off }}
    ```
-   Same expression is used for the post-delay re-check (second template condition). With `mode: restart`, a new motion during `wait`/`delay` restarts the run — the prior wait is abandoned and the light stays on.
-3. `delay: {seconds: !input no_motion_wait}` — structured form required (`HA120`).
-4. `condition: template` — identical `ALL_OFF` check. Guards against motion returning during the delay (race avoidance).
-5. `action: light.turn_off` → same target.
+   Same expression is used for the post-delay re-check (second template condition).
+3. `delay: {seconds: !input no_motion_wait}` — structured form required (`HA120`). Because `mode: restart` restarts the automation on any motion `off→on`, this countdown effectively measures time since the **last** motion event, not since the first sensor turned off.
+4. `condition: template` — ownership re-check (§5.1, same expression as step 1).
+5. `condition: template` — identical `ALL_OFF` check. Guards the race where motion returns exactly around the end of the delay.
+6. `action: light.turn_off` → same target, then optional flag release (`input_boolean.turn_off`).
+
+### 5.1 Ownership respect (manual / other automations)
+
+Every light state carries a `context`: `user_id` set ⇒ changed by a **person** through HA (app, dashboard, voice); `user_id` null ⇒ automation/script or physical/integration origin. The automation never turns off a light it doesn't own:
+
+- **Always (stateless):** any target light that is ON with `context.user_id` set is *foreign* → the run stops before `turn_on` and before `turn_off`.
+- **With `ownership_flag` helper selected:** additionally, any target light that is ON while the flag is OFF is *foreign* — this is what respects lights turned on by **other automations** (e.g. the button blueprint), whose `user_id` is null. The flag is the only way to tell "my previous run's light" (flag still ON) from "the button automation's light" (flag OFF).
+
+| Light state | Flag | Result |
+|---|---|---|
+| OFF | any | proceed normally |
+| ON, `user_id` set | any | foreign → untouched |
+| ON, `user_id` null | OFF / absent | foreign (button/no-flag path per above) |
+| ON, `user_id` null | ON | ours → turn off after wait |
+
+Fail-open cases: unavailable/deleted flag entity, area/device light targets (no entity list) → checks are skipped and the automation behaves as before. Known ceiling (marked `ponytail:` in the YAML): after a mid-run HA restart a stale ON flag can mis-claim a light another automation just turned on — it self-heals on the next manual toggle. Physical switches toggling the relay outside HA are not detectable via context.
+
+The checks require the light target to be **entity-based** (`light_entities_var` extracts `entity_id` from the target); with area/device targets the ownership logic is skipped.
+
+```mermaid
+flowchart TD
+  START([Target light is ON]) --> UID{context.user_id set?}
+  UID -->|yes - person via HA| FOREIGN[FOREIGN: run stops<br/>light untouched]
+  UID -->|no| FLAG{ownership flag usable?}
+  FLAG -->|absent or unavailable| MANAGED[not foreign - managed]
+  FLAG -->|yes| FS{flag state?}
+  FS -->|ON - we claimed it| MANAGED
+  FS -->|OFF - other automation| FOREIGN
+  style FOREIGN fill:#ffcdd2
+  style MANAGED fill:#c8e6c9
+```
+
+### 5.2 Countdown resets on every motion
+
+Because `mode: restart` restarts the run on each motion `off→on`, the light goes off `no_motion_wait` after the **last** motion clears — extra motion events extend the on-period, they never shorten it:
+
+```mermaid
+gantt
+  title Light off at last motion clear + 120 s
+  dateFormat HH:mm:ss
+  axisFormat %H:%M:%S
+  section Motion
+  sensor A :a1, 15:26:33, 15:27:00
+  sensor B :a2, 15:27:45, 15:28:10
+  sensor A :a3, 15:29:00, 15:29:05
+  section Light
+  corridor ON :crit, 15:26:33, 15:31:05
+```
 
 If `motions` resolves to `[]` (no sensors configured), both checks return `true` immediately — the sequence degrades to turn_on → delay → turn_off.
 
@@ -185,7 +253,11 @@ If `motions` resolves to `[]` (no sensors configured), both checks return `true`
 | `sun.sun` attrs `null` | Gate returns `true` (fail-open) rather than blocking. |
 | `window_start == window_end` (e.g. `12h`/`12h`) | Always `true`. |
 | Window wraps midnight | `now >= start or now < end` branch. |
-| Motion returns during `delay` | Post-delay `ALL_OFF` re-check prevents premature off. |
+| Motion returns during `delay` | `mode: restart` restarts the run (countdown resets); the post-delay `ALL_OFF` re-check guards the end-of-delay race. |
+| Gate false while light already on | Turn-off tail still runs → light goes off after `no_motion_wait`, **unless** the light is foreign-owned (§5.1) — then it is left untouched. |
+| Light ON with `context.user_id` set | Foreign (person via HA) → no `turn_on` over it, no `turn_off` under it. |
+| Light ON, flag OFF (flag configured) | Foreign (other automation, e.g. button) → untouched. |
+| Area/device light target | Ownership checks skipped (no entity list) → previous behavior. |
 | `mode: restart` | New trigger restarts; no queued duplicate runs. |
 | `!input` in Jinja | Forbidden — must go via `variables:` (`BP012`). |
 | `delay: !input` | Must be `delay: {seconds: !input ...}` (`HA120`). |

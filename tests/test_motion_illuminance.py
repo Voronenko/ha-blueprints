@@ -5,7 +5,7 @@ import pathlib
 
 import pytest
 
-from tests.helpers import extract_after_condition_template, extract_wait_template, load_blueprint, render_template
+from tests.helpers import extract_after_condition_template, extract_value_template, extract_wait_template, iter_template_conditions, load_blueprint, render_template
 
 # Fixed fake sun for deterministic tests (Europe/Kyiv-like wall clock)
 # We use naive UTC+ offsets via tzinfo=timezone.utc then wall times; simpler: fixed aware UTC
@@ -35,10 +35,10 @@ def bp():
 
 @pytest.fixture(scope="module")
 def main_template(bp):
-    # first (and only) condition
-    conds = bp.get("conditions") or []
-    assert conds, "no conditions"
-    return conds[0]["value_template"]
+    # gate template: inside actions[0].choose (falls back to conditions[] if ever moved back)
+    t = extract_value_template(bp)
+    assert t, "no gate template found"
+    return t
 
 
 @pytest.fixture(scope="module")
@@ -83,6 +83,102 @@ def test_blueprint_has_expected_inputs(bp):
     # illuminance defaults to any (override)
     assert inputs["illuminance"]["input"]["illuminance_mode"]["default"] == "any"
     assert "lux_entity" not in inputs.get("illuminance", {}).get("input", {})
+
+
+def test_gate_in_actions_not_automation_condition(bp):
+    # Deadlock fix: with mode: restart, a top-level condition that turns false
+    # while the light is on (e.g. the light itself raises lux) cancels the old
+    # run and blocks the new one -> light stranded ON. The gate must live in
+    # the first action so the no-motion tail always runs.
+    assert not (bp.get("conditions")), "gate must not be an automation-level condition"
+    actions = bp["actions"]
+    assert isinstance(actions, list) and actions, "no actions"
+    first = actions[0]
+    choose = first.get("choose") if isinstance(first, dict) else None
+    assert choose, "first action must be the choose gate"
+    entries = choose if isinstance(choose, list) else choose.get("choose", [])
+    assert entries, "choose has no branches"
+    seq = entries[0].get("sequence") or []
+    assert any(isinstance(s, dict) and s.get("action") == "light.turn_on" for s in seq), "gate branch must turn light on"
+    # tail after the gate: wait_template -> delay -> 2 conditions -> light.turn_off
+    # (ownership check + all-off check; the trailing flag-release `if` is skipped)
+    kinds = []
+    for a in actions[1:]:
+        if not isinstance(a, dict):
+            continue
+        if "wait_template" in a:
+            kinds.append("wait")
+        elif "delay" in a:
+            kinds.append("delay")
+        elif "condition" in a:
+            kinds.append("condition")
+        elif "action" in a:
+            kinds.append(a["action"])
+    assert kinds == ["wait", "delay", "condition", "condition", "light.turn_off"], f"unexpected tail: {kinds}"
+    # restart keeps the no-motion countdown reset on every motion event
+    assert bp["mode"] == "restart"
+    assert bp["max_exceeded"] == "silent"
+
+
+@pytest.fixture(scope="module")
+def foreign_template(bp):
+    # ownership-respect check appears twice (before turn_on and before turn_off)
+    ts = [t for t in iter_template_conditions(bp) if "namespace(foreign" in t]
+    assert len(ts) == 2, f"expected 2 foreign-owner checks, got {len(ts)}"
+    assert ts[0].strip() == ts[1].strip(), "foreign-owner checks must stay identical"
+    return ts[0]
+
+
+def _render_foreign(foreign_template, *, light_state="on", user_id=None, flag=None, flag_state="off", lights=("light.corridor",)):
+    import tests.helpers as h
+
+    states = {}
+    if flag is not None:
+        states[flag] = flag_state
+    return render_template(
+        foreign_template,
+        now_dt=SUNRISE,
+        next_rising=None,
+        next_setting=None,
+        states=states,
+        variables={"light_entities_var": list(lights), "ownership_flag_var": flag if flag is not None else []},
+        light_objs=[h.make_light_obj("light.corridor", light_state, user_id=user_id)],
+    )
+
+
+def test_foreign_owner_respects_human_via_ha(foreign_template):
+    # light on, last touched by a person through HA -> not ours -> condition false
+    assert _render_foreign(foreign_template, user_id="abc123") is False
+
+
+def test_foreign_owner_respects_other_automation_when_flag_off(foreign_template):
+    # light on by a button automation (user_id null) + ownership flag off -> foreign
+    assert _render_foreign(foreign_template, flag="input_boolean.motion_owns_corridor", flag_state="off") is False
+
+
+def test_foreign_owner_allows_own_light_when_flag_on(foreign_template):
+    # our claim: flag on, user_id null -> proceed (turn off)
+    assert _render_foreign(foreign_template, flag="input_boolean.motion_owns_corridor", flag_state="on") is True
+
+
+def test_foreign_owner_without_flag_manages_non_human_lights(foreign_template):
+    # no flag configured: only HA-human touches are respected (option 1 base)
+    assert _render_foreign(foreign_template) is True
+
+
+def test_foreign_owner_ignores_light_that_is_off(foreign_template):
+    # foreign context on an OFF light is irrelevant -> proceed
+    assert _render_foreign(foreign_template, light_state="off", user_id="abc123") is True
+
+
+def test_foreign_owner_unavailable_flag_fails_open(foreign_template):
+    # deleted/unavailable flag entity must not block management
+    assert _render_foreign(foreign_template, flag="input_boolean.gone", flag_state="unavailable") is True
+
+
+def test_foreign_owner_empty_lights_fails_open(foreign_template):
+    # area/device targets expose no entity list -> behave as before
+    assert _render_foreign(foreign_template, lights=()) is True
 
 
 def test_illuminance_any_below_overrides_night(main_template):
